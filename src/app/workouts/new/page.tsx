@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, forwardRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
@@ -15,9 +15,12 @@ import {
   Dumbbell, 
   Save, 
   ArrowLeft,
-  X
+  X,
+  Calendar
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
 
 // Define types for our workout data
 type Exercise = {
@@ -55,10 +58,11 @@ export default function NewWorkout() {
   const [formattedDate, setFormattedDate] = useState<string>('');
   const [workoutId, setWorkoutId] = useState<string | null>(null);
   const [autoSaveStatus, setAutoSaveStatus] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [showDatePicker, setShowDatePicker] = useState<boolean>(false);
 
   // Get current date in format "April 5, 2025"
-  const getFormattedDate = () => {
-    const date = new Date();
+  const getFormattedDate = (date: Date = new Date()) => {
     return date.toLocaleDateString('en-US', { 
       year: 'numeric', 
       month: 'long', 
@@ -67,8 +71,7 @@ export default function NewWorkout() {
   };
 
   // Get current date in format "Workout Apr 5, 2025" for default workout name
-  const getDefaultWorkoutName = () => {
-    const date = new Date();
+  const getDefaultWorkoutName = (date: Date = new Date()) => {
     return `Workout ${date.toLocaleDateString('en-US', { 
       month: 'short', 
       day: 'numeric',
@@ -122,7 +125,7 @@ export default function NewWorkout() {
             {
               name: defaultName,
               user_id: data.user.id,
-              date: new Date().toISOString(),
+              date: selectedDate.toISOString(),
               completed: false
             }
           ])
@@ -140,7 +143,7 @@ export default function NewWorkout() {
     };
 
     checkUserAndLoadLiftTypes();
-  }, [router]);
+  }, [router, selectedDate]);
 
   // Auto-save workout name when it changes
   useEffect(() => {
@@ -531,6 +534,66 @@ export default function NewWorkout() {
     }
   };
 
+  // Handle date change
+  const handleDateChange = async (date: Date | null, event?: React.SyntheticEvent<any, Event>) => {
+    if (!workoutId || !user || !date) return;
+    
+    setSelectedDate(date);
+    const newFormattedDate = getFormattedDate(date);
+    setFormattedDate(newFormattedDate);
+    
+    // Update workout name based on new date
+    const newWorkoutName = getDefaultWorkoutName(date);
+    setWorkoutName(newWorkoutName);
+    
+    // Update workout date in database
+    try {
+      setAutoSaveStatus('Updating date...');
+      const { error } = await supabase
+        .from('workouts')
+        .update({
+          name: newWorkoutName,
+          date: date.toISOString()
+        })
+        .eq('id', workoutId);
+      
+      if (error) throw error;
+      setAutoSaveStatus('Date updated');
+      
+      // Clear status after 2 seconds
+      setTimeout(() => {
+        setAutoSaveStatus(null);
+      }, 2000);
+    } catch (error: any) {
+      console.error('Error updating workout date:', error);
+      setAutoSaveStatus('Error updating date');
+      
+      // Clear error status after 3 seconds
+      setTimeout(() => {
+        setAutoSaveStatus(null);
+      }, 3000);
+    }
+    
+    setShowDatePicker(false);
+  };
+  
+  // Custom input component for the date picker
+  const CustomDatePickerInput = forwardRef<HTMLButtonElement, { value?: string; onClick?: () => void }>(
+    ({ value, onClick }, ref) => (
+      <button
+        className="flex items-center text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white"
+        onClick={onClick}
+        ref={ref}
+        type="button"
+      >
+        <Calendar className="h-5 w-5 mr-1" />
+        <span className="text-sm">{value || formattedDate}</span>
+      </button>
+    )
+  );
+  
+  CustomDatePickerInput.displayName = 'CustomDatePickerInput';
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <header className="sticky top-0 z-10 bg-white shadow-sm dark:bg-gray-800">
@@ -572,28 +635,62 @@ export default function NewWorkout() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         {loading ? (
           <div className="flex h-64 items-center justify-center">
-            <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600"></div>
+            <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-2">
+                <div className="h-5 w-5 animate-spin rounded-full border-b-2 border-t-2 border-blue-600"></div>
+                <p className="text-lg text-gray-600 dark:text-gray-300">Creating new workout...</p>
+              </div>
+            </div>
+          </div>
+        ) : error ? (
+          <div className="rounded-md bg-red-50 p-4 dark:bg-red-900/20">
+            <div className="flex">
+              <div className="flex-shrink-0">
+                <svg className="h-5 w-5 text-red-400 dark:text-red-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <h3 className="text-sm font-medium text-red-800 dark:text-red-200">Error creating workout</h3>
+                <div className="mt-2 text-sm text-red-700 dark:text-red-300">
+                  <p>{error}</p>
+                </div>
+              </div>
+            </div>
           </div>
         ) : (
           <>
-            {error && (
-              <div className="mb-4 rounded-md bg-red-50 p-4 dark:bg-red-900">
-                <div className="flex">
-                  <div className="flex-shrink-0">
-                    <X className="h-5 w-5 text-red-400 dark:text-red-500" />
-                  </div>
-                  <div className="ml-3">
-                    <h3 className="text-sm font-medium text-red-800 dark:text-red-200">Error</h3>
-                    <div className="mt-2 text-sm text-red-700 dark:text-red-300">
-                      <p>{error}</p>
-                    </div>
-                  </div>
+            <div className="mb-6 flex items-center justify-between">
+              <div className="flex items-center space-x-4">
+                <Link 
+                  href="/workouts" 
+                  className="rounded-full p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white"
+                >
+                  <ArrowLeft className="h-5 w-5" />
+                </Link>
+                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">New Workout</h1>
+              </div>
+              
+              <div className="flex items-center space-x-4">
+                {autoSaveStatus && (
+                  <span className="text-sm text-gray-500 dark:text-gray-400">{autoSaveStatus}</span>
+                )}
+                
+                <div className="relative">
+                  <DatePicker
+                    selected={selectedDate}
+                    onChange={handleDateChange}
+                    customInput={<CustomDatePickerInput />}
+                    popperClassName="z-10"
+                    dateFormat="MMMM d, yyyy"
+                  />
                 </div>
               </div>
-            )}
+            </div>
+            
             {/* Add exercise form */}
             <div className="mb-8 rounded-lg border border-gray-200 bg-white p-4 shadow dark:border-gray-700 dark:bg-gray-800">
               <h3 className="mb-4 text-lg font-medium text-gray-900 dark:text-white">Add Exercise</h3>

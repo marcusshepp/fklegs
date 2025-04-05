@@ -3,9 +3,18 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
-}
-
-@theme inline {
+  --primary: #3b82f6;
+  --primary-hover: #2563eb;
+  --secondary: #f3f4f6;
+  --secondary-hover: #e5e7eb;
+  --accent: #8b5cf6;
+  --success: #10b981;
+  --error: #ef4444;
+  --border: #e5e7eb;
+  --border-focus: #3b82f6;
+  --card: #ffffff;
+  --card-foreground: #171717;
+  --radius: 0.5rem;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
@@ -16,11 +25,70 @@
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
+    --primary: #3b82f6;
+    --primary-hover: #60a5fa;
+    --secondary: #1f2937;
+    --secondary-hover: #374151;
+    --accent: #8b5cf6;
+    --success: #10b981;
+    --error: #ef4444;
+    --border: #374151;
+    --border-focus: #60a5fa;
+    --card: #1f2937;
+    --card-foreground: #ededed;
   }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Modern form elements */
+input, select, textarea {
+  font-size: 16px; /* Prevents zoom on mobile */
+  transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+
+/* Improved focus states */
+*:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* Better tap targets for mobile */
+button, 
+a[role="button"],
+input[type="submit"],
+input[type="button"] {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Improved form labels */
+label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+}
+
+/* Better table responsiveness */
+@media (max-width: 640px) {
+  table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  th, td {
+    white-space: nowrap;
+  }
+  
+  .container {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
 }

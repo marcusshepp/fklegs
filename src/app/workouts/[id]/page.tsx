@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
+import { CheckCircle, Circle, ArrowLeft } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 type WorkoutData = {
   id: string;
@@ -143,128 +145,74 @@ export default function WorkoutDetail({ params }: { params: { id: string } }) {
     checkUserAndLoadWorkout();
   }, [params.id, router]);
 
-  const toggleSetCompletion = async (exerciseId: string, setId: string) => {
-    if (!workout) return;
-    
-    // Update local state
-    const updatedWorkout = {
-      ...workout,
-      exercises: workout.exercises.map(exercise => {
-        if (exercise.id === exerciseId) {
-          return {
-            ...exercise,
-            sets: exercise.sets.map(set => {
-              if (set.id === setId) {
-                return {
-                  ...set,
-                  completed: !set.completed
-                };
-              }
-              return set;
-            })
-          };
-        }
-        return exercise;
-      })
-    };
-    
-    setWorkout(updatedWorkout);
-    
-    // Update in database
-    try {
-      const setToUpdate = updatedWorkout.exercises
-        .find(e => e.id === exerciseId)?.sets
-        .find(s => s.id === setId);
-      
-      if (setToUpdate) {
-        await supabase
-          .from('sets')
-          .update({ completed: setToUpdate.completed })
-          .eq('id', setId);
-      }
-    } catch (error: any) {
-      setError(error.message || 'Failed to update set');
-    }
-  };
-
   const updateSetValue = async (exerciseId: string, setId: string, field: 'weight' | 'reps', value: number) => {
     if (!workout) return;
     
-    // Update local state
-    const updatedWorkout = {
-      ...workout,
-      exercises: workout.exercises.map(exercise => {
-        if (exercise.id === exerciseId) {
-          return {
-            ...exercise,
-            sets: exercise.sets.map(set => {
-              if (set.id === setId) {
-                return {
-                  ...set,
-                  [field]: value
-                };
-              }
-              return set;
-            })
-          };
-        }
-        return exercise;
-      })
-    };
-    
-    setWorkout(updatedWorkout);
-    
-    // Update in database
     try {
-      const setToUpdate = updatedWorkout.exercises
-        .find(e => e.id === exerciseId)?.sets
-        .find(s => s.id === setId);
+      setSaving(true);
       
-      if (setToUpdate) {
-        await supabase
-          .from('sets')
-          .update({ [field]: value })
-          .eq('id', setId);
-      }
+      // Update in database
+      const { error: updateError } = await supabase
+        .from('sets')
+        .update({ [field]: value })
+        .eq('id', setId);
+      
+      if (updateError) throw updateError;
+      
+      // Update local state
+      setWorkout(prev => {
+        if (!prev) return prev;
+        
+        return {
+          ...prev,
+          exercises: prev.exercises.map(e => {
+            if (e.id !== exerciseId) return e;
+            
+            return {
+              ...e,
+              sets: e.sets.map(s => {
+                if (s.id !== setId) return s;
+                return { ...s, [field]: value };
+              })
+            };
+          })
+        };
+      });
     } catch (error: any) {
+      console.error(`Error updating set ${field}:`, error);
       setError(error.message || 'Failed to update set');
+    } finally {
+      setSaving(false);
     }
   };
 
   const completeWorkout = async () => {
     if (!workout) return;
     
-    setSaving(true);
-    
     try {
-      // Check if all sets are completed
-      const allSetsCompleted = workout.exercises.every(exercise => 
-        exercise.sets.every(set => set.completed)
-      );
+      setSaving(true);
       
-      if (!allSetsCompleted) {
-        if (!confirm('Not all sets are marked as completed. Complete workout anyway?')) {
-          setSaving(false);
-          return;
-        }
-      }
-      
-      // Update workout status
-      await supabase
+      // Update in database
+      const { error: updateError } = await supabase
         .from('workouts')
         .update({ completed: true })
         .eq('id', workout.id);
       
-      // Update local state
-      setWorkout({
-        ...workout,
-        completed: true
-      });
+      if (updateError) throw updateError;
       
-      // Redirect to dashboard
-      router.push('/dashboard?message=Workout completed successfully!');
+      // Update local state
+      setWorkout(prev => {
+        if (!prev) return prev;
+        
+        return {
+          ...prev,
+          completed: true
+        };
+      });
     } catch (error: any) {
+      console.error('Error completing workout:', error);
       setError(error.message || 'Failed to complete workout');
+    } finally {
       setSaving(false);
     }
   };
@@ -272,137 +220,201 @@ export default function WorkoutDetail({ params }: { params: { id: string } }) {
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
-        <p className="text-lg">Loading workout...</p>
+        <div className="text-center">
+          <div className="mb-4 h-12 w-12 animate-spin rounded-full border-t-2 border-b-2 border-blue-500"></div>
+          <p>Loading workout...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="rounded-lg bg-red-50 p-6 text-center">
+          <h2 className="mb-2 text-xl font-bold text-red-700">Error</h2>
+          <p className="text-red-600">{error}</p>
+          <div className="mt-4">
+            <Link href="/workouts" className="text-blue-600 hover:underline">
+              Back to Workouts
+            </Link>
+          </div>
+        </div>
       </div>
     );
   }
 
   if (!workout) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center">
-        <p className="text-lg">Workout not found or you don't have permission to view it.</p>
-        <Link
-          href="/dashboard"
-          className="mt-4 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-        >
-          Return to Dashboard
-        </Link>
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="text-center">
+          <h2 className="mb-2 text-xl font-bold">Workout Not Found</h2>
+          <p>The workout you're looking for doesn't exist or you don't have access to it.</p>
+          <div className="mt-4">
+            <Link href="/workouts" className="text-blue-600 hover:underline">
+              Back to Workouts
+            </Link>
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen p-6">
-      <div className="mx-auto max-w-4xl">
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold">{workout.name}</h1>
-            <p className="text-sm text-gray-600">
-              {new Date(workout.date).toLocaleDateString()} • 
-              {workout.completed ? ' Completed' : ' In Progress'}
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <Link
-              href="/dashboard"
-              className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-            >
-              Back to Dashboard
-            </Link>
-            {!workout.completed && (
-              <button
-                onClick={completeWorkout}
-                disabled={saving}
-                className="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
-              >
-                {saving ? 'Saving...' : 'Complete Workout'}
-              </button>
-            )}
-          </div>
+    <div className="container mx-auto px-4 py-8">
+      <div className="mb-6 flex items-center justify-between">
+        <div className="flex items-center space-x-4">
+          <Link
+            href="/workouts"
+            className="rounded-full p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </Link>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+            {workout.name || `Workout ${new Date(workout.date).toLocaleDateString()}`}
+          </h1>
         </div>
-
-        {error && (
-          <div className="mb-6 rounded-md bg-red-50 p-4 text-sm text-red-700">
-            {error}
-          </div>
-        )}
-
-        {workout.completed && (
-          <div className="mb-6 rounded-md bg-green-50 p-4 text-sm text-green-700">
-            This workout has been completed.
-          </div>
-        )}
-
-        <div className="space-y-6">
-          {workout.exercises.map((exercise) => (
-            <div key={exercise.id} className="rounded-lg border bg-white p-6 shadow-sm">
+      </div>
+      
+      <div className="mb-6">
+        <p className="text-gray-600">Date: {new Date(workout.date).toLocaleDateString()}</p>
+        <p className="text-gray-600">
+          Status: {workout.completed ? (
+            <span className="font-medium text-green-600">Completed</span>
+          ) : (
+            <span className="font-medium text-blue-600">In Progress</span>
+          )}
+        </p>
+      </div>
+      
+      {!workout.completed && (
+        <div className="mb-8">
+          <button
+            onClick={completeWorkout}
+            className="rounded-md bg-green-600 px-4 py-2 font-medium text-white shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-green-500 focus:ring-offset-2"
+          >
+            Mark Workout as Complete
+          </button>
+        </div>
+      )}
+      
+      <div className="mb-8">
+        <h2 className="mb-4 text-xl font-semibold">Exercises</h2>
+        
+        <div className="grid gap-6 md:grid-cols-2">
+          {workout.exercises.map(exercise => (
+            <div key={exercise.id} className="rounded-lg border bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
               <div className="mb-4">
-                <h2 className="text-xl font-medium">{exercise.name}</h2>
+                <h2 className="text-xl font-medium dark:text-white">{exercise.name}</h2>
                 {exercise.liftTypeName && (
-                  <p className="text-sm text-gray-500">
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
                     Type: {exercise.liftTypeName}
                   </p>
                 )}
               </div>
               
-              <div className="mb-4 overflow-x-auto">
-                <table className="w-full min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
+              <div className="overflow-x-auto sm:overflow-visible">
+                <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                  <thead className="hidden sm:table-header-group bg-gray-50 dark:bg-gray-700">
                     <tr>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                      <th scope="col" className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
                         Set
                       </th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                        Weight (lbs)
+                      <th scope="col" className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                        Weight
                       </th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                      <th scope="col" className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
                         Reps
-                      </th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                        Completed
                       </th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-200 bg-white">
+                  <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                     {exercise.sets.map((set, index) => (
                       <tr key={set.id}>
-                        <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-900">
+                        {/* Mobile layout - grid style */}
+                        <td className="sm:hidden py-4 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium text-gray-900 dark:text-white">Set {index + 1}</span>
+                          </div>
+                          <div className="flex items-center space-x-6">
+                            <div className="flex flex-col">
+                              <span className="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">Weight</span>
+                              {workout.completed ? (
+                                <span className="py-1.5 text-sm dark:text-white">{set.weight}</span>
+                              ) : (
+                                <input
+                                  type="number"
+                                  inputMode="decimal"
+                                  pattern="[0-9]*"
+                                  min="0"
+                                  step="2.5"
+                                  value={set.weight || ''}
+                                  onChange={(e) => updateSetValue(exercise.id, set.id, 'weight', parseFloat(e.target.value) || 0)}
+                                  className="block w-24 rounded-md border-0 py-2 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 dark:bg-gray-700 dark:text-white dark:ring-gray-600 dark:focus:ring-blue-500 sm:text-sm"
+                                  aria-label="Weight in pounds"
+                                  placeholder="Weight"
+                                />
+                              )}
+                            </div>
+                            <div className="flex flex-col">
+                              <span className="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">Reps</span>
+                              {workout.completed ? (
+                                <span className="py-1.5 text-sm dark:text-white">{set.reps}</span>
+                              ) : (
+                                <input
+                                  type="number"
+                                  inputMode="numeric"
+                                  pattern="[0-9]*"
+                                  min="0"
+                                  value={set.reps || ''}
+                                  onChange={(e) => updateSetValue(exercise.id, set.id, 'reps', parseInt(e.target.value) || 0)}
+                                  className="block w-24 rounded-md border-0 py-2 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 dark:bg-gray-700 dark:text-white dark:ring-gray-600 dark:focus:ring-blue-500 sm:text-sm"
+                                  aria-label="Number of repetitions"
+                                  placeholder="Reps"
+                                />
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                        
+                        {/* Desktop layout - traditional table */}
+                        <td className="hidden sm:table-cell whitespace-nowrap px-3 py-2 text-sm font-medium text-gray-900 dark:text-white">
                           {index + 1}
                         </td>
-                        <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-900">
+                        <td className="hidden sm:table-cell whitespace-nowrap px-3 py-2 text-sm text-gray-900 dark:text-white">
                           {workout.completed ? (
                             set.weight
                           ) : (
                             <input
                               type="number"
+                              inputMode="decimal"
+                              pattern="[0-9]*"
                               min="0"
-                              value={set.weight}
+                              step="2.5"
+                              value={set.weight || ''}
                               onChange={(e) => updateSetValue(exercise.id, set.id, 'weight', parseFloat(e.target.value) || 0)}
-                              className="w-20 rounded-md border border-gray-300 px-2 py-1 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                              className="block w-24 rounded-md border-0 py-2 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 dark:bg-gray-700 dark:text-white dark:ring-gray-600 dark:focus:ring-blue-500 sm:text-sm"
+                              aria-label="Weight in pounds"
+                              placeholder="Weight"
                             />
                           )}
                         </td>
-                        <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-900">
+                        <td className="hidden sm:table-cell whitespace-nowrap px-3 py-2 text-sm text-gray-900 dark:text-white">
                           {workout.completed ? (
                             set.reps
                           ) : (
                             <input
                               type="number"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
                               min="0"
-                              value={set.reps}
+                              value={set.reps || ''}
                               onChange={(e) => updateSetValue(exercise.id, set.id, 'reps', parseInt(e.target.value) || 0)}
-                              className="w-20 rounded-md border border-gray-300 px-2 py-1 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                              className="block w-24 rounded-md border-0 py-2 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 dark:bg-gray-700 dark:text-white dark:ring-gray-600 dark:focus:ring-blue-500 sm:text-sm"
+                              aria-label="Number of repetitions"
+                              placeholder="Reps"
                             />
                           )}
-                        </td>
-                        <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-900">
-                          <input
-                            type="checkbox"
-                            checked={set.completed}
-                            onChange={() => !workout.completed && toggleSetCompletion(exercise.id, set.id)}
-                            disabled={workout.completed}
-                            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
-                          />
                         </td>
                       </tr>
                     ))}
@@ -412,6 +424,15 @@ export default function WorkoutDetail({ params }: { params: { id: string } }) {
             </div>
           ))}
         </div>
+      </div>
+      <div className="mt-8 flex justify-center">
+        <Link
+          href="/workouts"
+          className="flex items-center text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+        >
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Back to Workouts
+        </Link>
       </div>
     </div>
   );

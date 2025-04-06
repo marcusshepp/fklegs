@@ -21,6 +21,7 @@ import {
 import { cn } from '@/lib/utils';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
+import LiftTypeSelector from '@/components/LiftTypeSelector';
 
 // Define types for our workout data
 type Exercise = {
@@ -60,6 +61,7 @@ export default function NewWorkout() {
   const [autoSaveStatus, setAutoSaveStatus] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [showDatePicker, setShowDatePicker] = useState<boolean>(false);
+  const [notes, setNotes] = useState<string>('');
 
   // Get current date in format "April 5, 2025"
   const getFormattedDate = (date: Date = new Date()) => {
@@ -70,7 +72,7 @@ export default function NewWorkout() {
     });
   };
 
-  // Get current date in format "Workout Apr 5, 2025" for default workout name
+  // Get default workout name based on date
   const getDefaultWorkoutName = (date: Date = new Date()) => {
     return `Workout ${date.toLocaleDateString('en-US', { 
       month: 'short', 
@@ -79,54 +81,56 @@ export default function NewWorkout() {
     })}`;
   };
 
-  const [workoutName, setWorkoutName] = useState<string>('');
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [selectedLiftType, setSelectedLiftType] = useState<string>('');
   const [liftTypes, setLiftTypes] = useState<LiftType[]>([]);
   const [newExerciseSets, setNewExerciseSets] = useState<Set[]>([{ id: crypto.randomUUID(), weight: 0, reps: 0, completed: false }]);
 
   useEffect(() => {
-    const checkUserAndLoadLiftTypes = async () => {
-      // Check if user is authenticated
-      const { data } = await supabase.auth.getUser();
+    checkUserAndLoadLiftTypes();
+  }, []);
+
+  const checkUserAndLoadLiftTypes = async () => {
+    // Check if user is authenticated
+    const { data } = await supabase.auth.getUser();
+    
+    if (!data.user) {
+      router.push('/auth/login');
+      return;
+    }
+    
+    setUser(data.user);
+    
+    // Load lift types
+    try {
+      const { data: liftTypesData, error: liftTypesError } = await supabase
+        .from('lift_types')
+        .select('*')
+        .order('name');
       
-      if (!data.user) {
-        router.push('/auth/login');
-        return;
-      }
+      if (liftTypesError) throw liftTypesError;
       
-      setUser(data.user);
-      
-      // Load lift types
-      try {
-        const { data: liftTypesData, error: liftTypesError } = await supabase
-          .from('lift_types')
-          .select('*')
-          .order('name');
-        
-        if (liftTypesError) throw liftTypesError;
-        
-        setLiftTypes(liftTypesData);
-      } catch (error: any) {
-        console.error('Error loading lift types:', error);
-      }
-      
-      // Set the current date and formatted date
-      const defaultName = getDefaultWorkoutName();
+      setLiftTypes(liftTypesData);
+    } catch (error: any) {
+      console.error('Error loading lift types:', error);
+    }
+    
+    // Set the current date and formatted date only if they haven't been set yet
+    if (!workoutId) {
       const formatted = getFormattedDate();
-      setWorkoutName(defaultName);
       setFormattedDate(formatted);
       
-      // Create initial workout
+      // Create initial workout immediately so date can be changed
       try {
         const { data: workoutData, error: workoutError } = await supabase
           .from('workouts')
           .insert([
             {
-              name: defaultName,
+              name: getDefaultWorkoutName(selectedDate),
               user_id: data.user.id,
               date: selectedDate.toISOString(),
-              completed: false
+              completed: false,
+              notes: ''
             }
           ])
           .select()
@@ -138,12 +142,10 @@ export default function NewWorkout() {
         console.error('Error creating initial workout:', error);
         setError('Failed to create workout. Please try again.');
       }
-      
-      setLoading(false);
-    };
-
-    checkUserAndLoadLiftTypes();
-  }, [router, selectedDate]);
+    }
+    
+    setLoading(false);
+  };
 
   // Auto-save workout name when it changes
   useEffect(() => {
@@ -154,35 +156,70 @@ export default function NewWorkout() {
         setAutoSaveStatus('Saving...');
         await supabase
           .from('workouts')
-          .update({ name: workoutName })
+          .update({ 
+            date: selectedDate.toISOString()
+          })
           .eq('id', workoutId);
         
         setAutoSaveStatus('Saved');
-        
-        // Clear status after 2 seconds
         setTimeout(() => {
           setAutoSaveStatus(null);
         }, 2000);
-      } catch (error) {
-        console.error('Error saving workout name:', error);
-        setAutoSaveStatus('Save failed');
-        
-        // Clear status after 2 seconds
+      } catch (error: any) {
+        console.error('Error updating workout:', error);
+        setAutoSaveStatus('Error saving');
         setTimeout(() => {
           setAutoSaveStatus(null);
-        }, 2000);
+        }, 3000);
       }
     };
     
     // Use debounce to avoid too many saves while typing
     const timeoutId = setTimeout(() => {
-      if (workoutId && workoutName.trim()) {
+      if (workoutId) {
         saveWorkoutName();
       }
     }, 1000);
     
     return () => clearTimeout(timeoutId);
-  }, [workoutName, workoutId, user]);
+  }, [selectedDate, workoutId, user]);
+
+  // Auto-save notes when they change
+  useEffect(() => {
+    const saveNotes = async () => {
+      if (!workoutId || !user) return;
+      
+      try {
+        setAutoSaveStatus('Saving...');
+        await supabase
+          .from('workouts')
+          .update({ 
+            notes: notes
+          })
+          .eq('id', workoutId);
+        
+        setAutoSaveStatus('Saved');
+        setTimeout(() => {
+          setAutoSaveStatus(null);
+        }, 2000);
+      } catch (error: any) {
+        console.error('Error updating notes:', error);
+        setAutoSaveStatus('Error saving');
+        setTimeout(() => {
+          setAutoSaveStatus(null);
+        }, 3000);
+      }
+    };
+    
+    // Use debounce to avoid too many saves while typing
+    const timeoutId = setTimeout(() => {
+      if (workoutId) {
+        saveNotes();
+      }
+    }, 1000);
+    
+    return () => clearTimeout(timeoutId);
+  }, [notes, workoutId, user]);
 
   const addSet = () => {
     setNewExerciseSets([...newExerciseSets, { id: crypto.randomUUID(), weight: 0, reps: 0, completed: false }]);
@@ -227,61 +264,130 @@ export default function NewWorkout() {
       return;
     }
     
-    if (!workoutId) {
-      setError('Workout not initialized yet. Please try again.');
-      return;
-    }
-    
     setSaving(true);
     
     try {
-      // Find the lift type name for display purposes
-      const liftType = liftTypes.find(lt => lt.id === selectedLiftType);
-      
-      // Create exercise in database
-      const { data: exerciseData, error: exerciseError } = await supabase
-        .from('exercises')
-        .insert([
-          {
-            name: liftType?.name || null,
-            workout_id: workoutId,
-            lift_type_id: selectedLiftType
-          }
-        ])
-        .select()
-        .single();
-      
-      if (exerciseError) throw exerciseError;
-      
-      // Create sets in database
-      const setsToInsert = newExerciseSets.map(set => ({
-        exercise_id: exerciseData.id,
-        reps: set.reps,
-        weight: set.weight,
-        completed: set.completed
-      }));
-      
-      const { data: setsData, error: setsError } = await supabase
-        .from('sets')
-        .insert(setsToInsert)
-        .select();
-      
-      if (setsError) throw setsError;
-      
-      // Update local state
-      const newExercise: Exercise = {
-        id: exerciseData.id,
-        name: liftType?.name || null,
-        liftTypeId: selectedLiftType,
-        sets: setsData.map((set: any) => ({
-          id: set.id,
-          weight: set.weight,
+      // If we don't have a workout ID yet, create the workout first
+      if (!workoutId) {
+        // Create initial workout
+        const { data: workoutData, error: workoutError } = await supabase
+          .from('workouts')
+          .insert([
+            {
+              name: getDefaultWorkoutName(selectedDate),
+              user_id: user.id,
+              date: selectedDate.toISOString(),
+              completed: false,
+              notes: notes
+            }
+          ])
+          .select()
+          .single();
+
+        if (workoutError) throw workoutError;
+        setWorkoutId(workoutData.id);
+        
+        // Use the newly created workout ID for the exercise
+        const newWorkoutId = workoutData.id;
+        
+        // Find the lift type name for display purposes
+        const liftType = liftTypes.find(lt => lt.id === selectedLiftType);
+        
+        // Create exercise in database
+        const { data: exerciseData, error: exerciseError } = await supabase
+          .from('exercises')
+          .insert([
+            {
+              name: liftType?.name || null,
+              workout_id: newWorkoutId,
+              lift_type_id: selectedLiftType
+            }
+          ])
+          .select()
+          .single();
+        
+        if (exerciseError) throw exerciseError;
+        
+        // Create sets in database
+        const setsToInsert = newExerciseSets.map(set => ({
+          exercise_id: exerciseData.id,
           reps: set.reps,
+          weight: set.weight,
           completed: set.completed
-        }))
-      };
+        }));
+        
+        const { data: setsData, error: setsError } = await supabase
+          .from('sets')
+          .insert(setsToInsert)
+          .select();
+        
+        if (setsError) throw setsError;
+        
+        // Update local state
+        const newExercise: Exercise = {
+          id: exerciseData.id,
+          name: liftType?.name || null,
+          liftTypeId: selectedLiftType,
+          sets: setsData.map((set: any) => ({
+            id: set.id,
+            weight: set.weight,
+            reps: set.reps,
+            completed: set.completed
+          }))
+        };
+        
+        setExercises([...exercises, newExercise]);
+      } else {
+        // Workout already exists, just add the exercise
+        // Find the lift type name for display purposes
+        const liftType = liftTypes.find(lt => lt.id === selectedLiftType);
+        
+        // Create exercise in database
+        const { data: exerciseData, error: exerciseError } = await supabase
+          .from('exercises')
+          .insert([
+            {
+              name: liftType?.name || null,
+              workout_id: workoutId,
+              lift_type_id: selectedLiftType
+            }
+          ])
+          .select()
+          .single();
+        
+        if (exerciseError) throw exerciseError;
+        
+        // Create sets in database
+        const setsToInsert = newExerciseSets.map(set => ({
+          exercise_id: exerciseData.id,
+          reps: set.reps,
+          weight: set.weight,
+          completed: set.completed
+        }));
+        
+        const { data: setsData, error: setsError } = await supabase
+          .from('sets')
+          .insert(setsToInsert)
+          .select();
+        
+        if (setsError) throw setsError;
+        
+        // Update local state
+        const newExercise: Exercise = {
+          id: exerciseData.id,
+          name: liftType?.name || null,
+          liftTypeId: selectedLiftType,
+          sets: setsData.map((set: any) => ({
+            id: set.id,
+            weight: set.weight,
+            reps: set.reps,
+            completed: set.completed
+          }))
+        };
+        
+        setExercises([...exercises, newExercise]);
+      }
       
-      setExercises([...exercises, newExercise]);
       setSelectedLiftType('');
       setNewExerciseSets([{ id: crypto.randomUUID(), weight: 0, reps: 0, completed: false }]);
       setError(null);
@@ -358,22 +464,20 @@ export default function NewWorkout() {
       const updatedExercises = [...exercises];
       const exerciseIndex = updatedExercises.findIndex(ex => ex.id === exerciseId);
       
-      if (exerciseIndex !== -1) {
-        updatedExercises[exerciseIndex] = {
-          ...updatedExercises[exerciseIndex],
-          sets: [
-            ...updatedExercises[exerciseIndex].sets,
-            {
-              id: setData.id,
-              weight: setData.weight,
-              reps: setData.reps,
-              completed: setData.completed
-            }
-          ]
-        };
-        
-        setExercises(updatedExercises);
-      }
+      updatedExercises[exerciseIndex] = {
+        ...updatedExercises[exerciseIndex],
+        sets: [
+          ...updatedExercises[exerciseIndex].sets,
+          {
+            id: setData.id,
+            weight: setData.weight,
+            reps: setData.reps,
+            completed: setData.completed
+          }
+        ]
+      };
+      
+      setExercises(updatedExercises);
       
       // Show success message
       setAutoSaveStatus('Set added');
@@ -536,45 +640,38 @@ export default function NewWorkout() {
 
   // Handle date change
   const handleDateChange = async (date: Date | null, event?: React.SyntheticEvent<any, Event>) => {
-    if (!workoutId || !user || !date) return;
+    if (!date) return;
     
     setSelectedDate(date);
-    const newFormattedDate = getFormattedDate(date);
-    setFormattedDate(newFormattedDate);
-    
-    // Update workout name based on new date
-    const newWorkoutName = getDefaultWorkoutName(date);
-    setWorkoutName(newWorkoutName);
+    setFormattedDate(getFormattedDate(date));
     
     // Update workout date in database
-    try {
-      setAutoSaveStatus('Updating date...');
-      const { error } = await supabase
-        .from('workouts')
-        .update({
-          name: newWorkoutName,
-          date: date.toISOString()
-        })
-        .eq('id', workoutId);
-      
-      if (error) throw error;
-      setAutoSaveStatus('Date updated');
-      
-      // Clear status after 2 seconds
-      setTimeout(() => {
-        setAutoSaveStatus(null);
-      }, 2000);
-    } catch (error: any) {
-      console.error('Error updating workout date:', error);
-      setAutoSaveStatus('Error updating date');
-      
-      // Clear error status after 3 seconds
-      setTimeout(() => {
-        setAutoSaveStatus(null);
-      }, 3000);
+    if (workoutId) {
+      try {
+        setAutoSaveStatus('Saving...');
+        
+        const { error } = await supabase
+          .from('workouts')
+          .update({ 
+            name: getDefaultWorkoutName(date),
+            date: date.toISOString()
+          })
+          .eq('id', workoutId);
+        
+        if (error) throw error;
+        
+        setAutoSaveStatus('Saved');
+        setTimeout(() => {
+          setAutoSaveStatus(null);
+        }, 2000);
+      } catch (error: any) {
+        console.error('Error updating workout date:', error);
+        setAutoSaveStatus('Error saving');
+        setTimeout(() => {
+          setAutoSaveStatus(null);
+        }, 3000);
+      }
     }
-    
-    setShowDatePicker(false);
   };
   
   // Custom input component for the date picker
@@ -608,15 +705,6 @@ export default function NewWorkout() {
               </Link>
               <h1 className="text-2xl font-bold text-gray-900 dark:text-white">New Workout</h1>
             </div>
-            <div className="flex-1 mx-4">
-              <input
-                type="text"
-                value={workoutName}
-                onChange={(e) => setWorkoutName(e.target.value)}
-                className="w-full rounded-md border-0 py-2 px-3 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 dark:bg-gray-700 dark:text-white dark:ring-gray-600 dark:focus:ring-blue-500 sm:text-sm"
-                placeholder="Workout Name"
-              />
-            </div>
             <div className="flex items-center">
               {autoSaveStatus && (
                 <span className={cn(
@@ -630,6 +718,16 @@ export default function NewWorkout() {
                   {autoSaveStatus === 'Error saving' && 'Error'}
                 </span>
               )}
+              
+              <div className="relative">
+                <DatePicker
+                  selected={selectedDate}
+                  onChange={handleDateChange}
+                  customInput={<CustomDatePickerInput />}
+                  popperClassName="z-10"
+                  dateFormat="MMMM d, yyyy"
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -697,18 +795,13 @@ export default function NewWorkout() {
               
               <div className="flex flex-col sm:flex-row gap-4">
                 <div className="flex-grow">
-                  <select
-                    value={selectedLiftType}
-                    onChange={(e) => setSelectedLiftType(e.target.value)}
-                    className="block w-full rounded-md border-0 py-2 px-3 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 dark:bg-gray-700 dark:text-white dark:ring-gray-600 dark:focus:ring-blue-500 sm:text-sm"
-                  >
-                    <option value="">Select Lift Type</option>
-                    {liftTypes.map((liftType) => (
-                      <option key={liftType.id} value={liftType.id}>
-                        {liftType.name}
-                      </option>
-                    ))}
-                  </select>
+                  <LiftTypeSelector
+                    liftTypes={liftTypes}
+                    selectedLiftType={selectedLiftType}
+                    onSelect={setSelectedLiftType}
+                    placeholder="Select Lift Type"
+                    className="w-full"
+                  />
                 </div>
                 
                 <button
@@ -721,6 +814,17 @@ export default function NewWorkout() {
               </div>
             </div>
 
+            {/* Notes section */}
+            <div className="mb-8 rounded-lg border border-gray-200 bg-white p-4 shadow dark:border-gray-700 dark:bg-gray-800">
+              <h3 className="mb-4 text-lg font-medium text-gray-900 dark:text-white">Workout Notes</h3>
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Add notes about this workout..."
+                className="w-full min-h-[100px] rounded-md border-0 py-2 px-3 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 dark:bg-gray-700 dark:text-white dark:ring-gray-600 dark:focus:ring-blue-500 sm:text-sm"
+              />
+            </div>
+            
             {/* Exercises list */}
             {exercises.length > 0 && (
               <div className="space-y-6">

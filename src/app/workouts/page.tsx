@@ -4,18 +4,37 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
-import { ArrowLeft, Plus, Calendar, Dumbbell, Clock, MoreVertical, Pencil, Trash2, X, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Plus, Calendar, Dumbbell, Clock, MoreVertical, Pencil, Trash2, X, AlertTriangle, BarChart2, Search, ArrowRight } from 'lucide-react';
 
 type Workout = {
   id: string;
   date: string;
-  name: string;
   completed: boolean;
   created_at: string;
+  totalSets: number;
 };
 
-// Custom confirmation dialog component
-function ConfirmationDialog({ 
+// Toast component
+const Toast = ({ message, type, onClose }: { message: string; type: 'success' | 'error'; onClose: () => void }) => {
+  return (
+    <div className={`fixed bottom-4 right-4 z-50 rounded-md p-4 shadow-lg ${type === 'success' ? 'bg-green-900' : 'bg-red-900'}`}>
+      <div className="flex items-center">
+        <span className={`mr-2 text-sm font-medium ${type === 'success' ? 'text-green-200' : 'text-red-200'}`}>
+          {message}
+        </span>
+        <button
+          onClick={onClose}
+          className={`ml-4 rounded-full p-1 ${type === 'success' ? 'text-green-200 hover:bg-green-800' : 'text-red-200 hover:bg-red-800'}`}
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// Confirmation Dialog component
+const ConfirmationDialog = ({ 
   isOpen, 
   onClose, 
   onConfirm, 
@@ -27,29 +46,24 @@ function ConfirmationDialog({
   onConfirm: () => void; 
   title: string; 
   message: string 
-}) {
+}) => {
   if (!isOpen) return null;
   
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-      <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl dark:bg-gray-800">
-        <div className="mb-4 flex items-center">
-          <AlertTriangle className="mr-3 h-6 w-6 text-red-500" />
-          <h3 className="text-lg font-medium text-gray-900 dark:text-white">{title}</h3>
-        </div>
-        <div className="mb-6">
-          <p className="text-sm text-gray-500 dark:text-gray-400">{message}</p>
-        </div>
+      <div className="w-full max-w-md rounded-lg bg-gray-800 p-6 shadow-xl">
+        <h3 className="mb-4 text-lg font-medium text-gray-100">{title}</h3>
+        <p className="mb-6 text-sm text-gray-300">{message}</p>
         <div className="flex justify-end space-x-4">
           <button
             onClick={onClose}
-            className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
+            className="rounded-md bg-gray-700 px-4 py-2 text-sm font-medium text-gray-200 hover:bg-gray-600"
           >
             Cancel
           </button>
           <button
             onClick={onConfirm}
-            className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600"
+            className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
           >
             Delete
           </button>
@@ -57,39 +71,7 @@ function ConfirmationDialog({
       </div>
     </div>
   );
-}
-
-// Toast notification component
-function Toast({ 
-  message, 
-  type = 'success', 
-  onClose 
-}: { 
-  message: string; 
-  type?: 'success' | 'error'; 
-  onClose: () => void 
-}) {
-  return (
-    <div className="fixed bottom-4 right-4 z-50 flex items-center rounded-lg bg-white px-4 py-3 shadow-lg dark:bg-gray-800">
-      <div className={`mr-3 flex h-8 w-8 items-center justify-center rounded-full ${
-        type === 'success' 
-          ? 'bg-green-100 text-green-500 dark:bg-green-900/30 dark:text-green-400' 
-          : 'bg-red-100 text-red-500 dark:bg-red-900/30 dark:text-red-400'
-      }`}>
-        {type === 'success' ? '✓' : '✕'}
-      </div>
-      <div className="mr-4">
-        <p className="text-sm font-medium text-gray-900 dark:text-white">{message}</p>
-      </div>
-      <button
-        onClick={onClose}
-        className="text-gray-400 hover:text-gray-500 dark:text-gray-500 dark:hover:text-gray-400"
-      >
-        <X className="h-5 w-5" />
-      </button>
-    </div>
-  );
-}
+};
 
 export default function Workouts() {
   const router = useRouter();
@@ -98,6 +80,7 @@ export default function Workouts() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
+  const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
   const menuRefs = useRef<{[key: string]: HTMLDivElement | null}>({});
   
   // State for confirmation dialog
@@ -128,28 +111,54 @@ export default function Workouts() {
       
       // Load workouts
       try {
-        // Get all workouts
+        console.log("Loading workouts for user:", data.user.id);
+        
+        // Get all workouts - ensure we get distinct workouts
         const { data: workoutsData, error: workoutsError } = await supabase
           .from('workouts')
           .select(`
             id,
             date,
-            name,
             completed,
-            created_at
+            created_at,
+            exercises:exercises(
+              id,
+              sets:sets(id)
+            )
           `)
           .eq('user_id', data.user.id)
-          .order('date', { ascending: false });
+          .order('date', { ascending: sortOrder === 'oldest' });
         
         if (workoutsError) throw workoutsError;
         
-        const formattedWorkouts = workoutsData.map((workout: any) => ({
-          id: workout.id,
-          date: new Date(workout.date).toLocaleDateString(),
-          name: workout.name || `Workout ${new Date(workout.date).toLocaleDateString()}`,
-          completed: workout.completed,
-          created_at: workout.created_at,
-        }));
+        console.log("Raw workouts data from database:", workoutsData);
+        
+        // Ensure we have unique workouts by ID
+        const uniqueWorkouts = Array.from(
+          new Map(workoutsData.map((workout: any) => [workout.id, workout])).values()
+        );
+        
+        console.log("Unique workouts after deduplication:", uniqueWorkouts);
+        
+        const formattedWorkouts = uniqueWorkouts.map((workout: any) => {
+          // Calculate total sets
+          let totalSets = 0;
+          if (workout.exercises && workout.exercises.length > 0) {
+            workout.exercises.forEach((exercise: any) => {
+              if (exercise.sets) {
+                totalSets += exercise.sets.length;
+              }
+            });
+          }
+          
+          return {
+            id: workout.id,
+            date: new Date(workout.date).toLocaleDateString(),
+            completed: workout.completed,
+            created_at: workout.created_at,
+            totalSets: totalSets
+          };
+        });
         
         setWorkouts(formattedWorkouts);
       } catch (error: any) {
@@ -161,7 +170,7 @@ export default function Workouts() {
     };
 
     checkUserAndLoadWorkouts();
-  }, [router]);
+  }, [router, sortOrder]);
 
   useEffect(() => {
     // Handle clicks outside the menu
@@ -215,7 +224,7 @@ export default function Workouts() {
     // Close any open menu
     setActiveMenu(null);
     
-    // Find the workout name
+    // Find the workout
     const workout = workouts.find(w => w.id === workoutId);
     if (!workout) return;
     
@@ -223,7 +232,7 @@ export default function Workouts() {
     setConfirmDialog({
       isOpen: true,
       workoutId,
-      workoutName: workout.name
+      workoutName: `Workout on ${workout.date}`
     });
   };
 
@@ -302,138 +311,163 @@ export default function Workouts() {
     }
   };
 
+  // Handle sort order change
+  const handleSortChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setSortOrder(e.target.value as 'newest' | 'oldest');
+  };
+
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-gray-900 pb-10">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6">
         <div className="mb-6 flex items-center justify-between">
-          <div className="flex items-center space-x-4">
-            <Link 
-              href="/dashboard" 
-              className="rounded-full p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white"
+          <h1 className="text-2xl font-bold text-gray-100">Workouts</h1>
+          <div className="flex space-x-4">
+            <Link
+              href="/workouts/stats"
+              className="flex items-center rounded-md bg-gray-800 px-4 py-2 text-sm font-medium text-gray-200 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-900"
             >
-              <ArrowLeft className="h-5 w-5" />
+              <BarChart2 className="mr-2 h-4 w-4" />
+              Stats
             </Link>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Your Workouts</h1>
+            <Link
+              href="/workouts/new"
+              className="flex items-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-900"
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              New Workout
+            </Link>
           </div>
-          <Link
-            href="/workouts/new"
-            className="flex items-center justify-center rounded-full bg-blue-600 p-3 text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:bg-blue-600 dark:hover:bg-blue-500"
-            aria-label="New Workout"
-          >
-            <Plus className="h-5 w-5" />
-          </Link>
         </div>
 
+        {/* Filters */}
+        <div className="mb-6 flex flex-col space-y-4 sm:flex-row sm:items-center sm:space-x-4 sm:space-y-0">
+          <div className="relative flex-1">
+            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+              <Search className="h-5 w-5 text-gray-400" />
+            </div>
+            <input
+              type="text"
+              placeholder="Search workouts..."
+              className="block w-full rounded-md border-0 py-1.5 pl-10 pr-3 bg-gray-800 text-gray-100 shadow-sm ring-1 ring-inset ring-gray-700 placeholder:text-gray-500 focus:ring-2 focus:ring-inset focus:ring-indigo-500 sm:text-sm"
+              value=""
+              onChange={(e) => {}}
+            />
+          </div>
+          <div>
+            <select
+              className="block w-full rounded-md border-0 py-1.5 pl-3 pr-10 bg-gray-800 text-gray-100 shadow-sm ring-1 ring-inset ring-gray-700 focus:ring-2 focus:ring-inset focus:ring-indigo-500 sm:text-sm"
+              value={sortOrder}
+              onChange={handleSortChange}
+            >
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Workouts List */}
         {loading ? (
           <div className="flex h-64 items-center justify-center">
-            <div className="flex items-center space-x-2">
-              <div className="h-5 w-5 animate-spin rounded-full border-b-2 border-t-2 border-blue-600"></div>
-              <p className="text-lg text-gray-600 dark:text-gray-300">Loading workouts...</p>
+            <div className="flex flex-col items-center">
+              <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-t-2 border-indigo-500"></div>
+              <span className="mt-2 text-sm text-gray-400">Loading workouts...</span>
             </div>
           </div>
         ) : error ? (
-          <div className="rounded-md bg-red-50 p-4 dark:bg-red-900/20">
-            <div className="flex">
-              <div className="flex-shrink-0">
-                <svg className="h-5 w-5 text-red-400 dark:text-red-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                </svg>
-              </div>
-              <div className="ml-3">
-                <h3 className="text-sm font-medium text-red-800 dark:text-red-200">Error loading workouts</h3>
-                <div className="mt-2 text-sm text-red-700 dark:text-red-300">
-                  <p>{error}</p>
-                </div>
-              </div>
-            </div>
+          <div className="rounded-lg bg-red-900/20 p-4 text-red-400">
+            <p className="text-center">{error}</p>
           </div>
         ) : workouts.length === 0 ? (
-          <div className="flex h-64 flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 p-12 text-center dark:border-gray-700">
-            <Dumbbell className="mx-auto h-12 w-12 text-gray-400 dark:text-gray-600" />
-            <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-white">No workouts yet</h3>
-            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Get started by creating a new workout.</p>
-            <div className="mt-6">
-              <Link
-                href="/workouts/new"
-                className="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:bg-blue-600 dark:hover:bg-blue-500"
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                New Workout
-              </Link>
-            </div>
+          <div className="rounded-lg bg-gray-800 p-8 text-center border border-gray-700 shadow-md">
+            <Dumbbell className="mx-auto h-12 w-12 text-gray-500 mb-4" />
+            <h3 className="text-lg font-medium text-gray-300 mb-2">No Workouts Found</h3>
+            <p className="text-gray-400 max-w-md mx-auto">
+              You haven't recorded any workouts yet.
+            </p>
+            <Link
+              href="/workouts/new"
+              className="mt-4 inline-flex items-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-900"
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Create Your First Workout
+            </Link>
           </div>
         ) : (
-          <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow dark:border-gray-700 dark:bg-gray-800">
-            <ul className="divide-y divide-gray-200 dark:divide-gray-700">
-              {workouts.map((workout) => (
-                <li key={workout.id} className="relative">
-                  <div className="group flex items-center justify-between px-6 py-4">
-                    <Link
-                      href={`/workouts/${workout.id}`}
-                      className="flex flex-1 items-center space-x-3"
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            {workouts.map((workout) => (
+              <div key={workout.id} className="relative rounded-lg bg-gray-800 border border-gray-700 shadow-md hover:bg-gray-700/80 transition-colors duration-200">
+                {/* Menu Button */}
+                <div className="absolute top-2 right-2 z-10">
+                  <button
+                    onClick={(e) => toggleMenu(workout.id, e)}
+                    className="rounded-full p-1.5 text-gray-400 hover:bg-gray-700 hover:text-white focus:outline-none"
+                    aria-label="Workout options"
+                  >
+                    <MoreVertical className="h-5 w-5" />
+                  </button>
+                  
+                  {/* Dropdown Menu */}
+                  {activeMenu === workout.id && (
+                    <div 
+                      ref={(el) => {
+                        if (el) {
+                          menuRefs.current[workout.id] = el;
+                        }
+                      }}
+                      className="absolute right-0 mt-1 w-48 rounded-md bg-gray-700 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none z-20"
                     >
-                      <div className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full ${
-                        workout.completed 
-                          ? 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400' 
-                          : 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
-                      }`}>
-                        <Dumbbell className="h-5 w-5" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-gray-900 dark:text-white">
-                          {workout.name}
-                        </p>
-                        <div className="mt-1 flex items-center space-x-4 text-xs text-gray-500 dark:text-gray-400">
-                          <div className="flex items-center">
-                            <Clock className="mr-1 h-3.5 w-3.5" />
-                            <span>{formatDate(workout.created_at)}</span>
-                          </div>
-                        </div>
-                      </div>
-                    </Link>
-                    
-                    <div className="flex items-center space-x-2">
-                      <div className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                        workout.completed 
-                          ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' 
-                          : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
-                      }`}>
-                        {workout.completed ? 'Completed' : 'In Progress'}
-                      </div>
-                      
-                      <div className="relative" ref={(el) => { menuRefs.current[workout.id] = el; }}>
-                        <button 
-                          onClick={(e) => toggleMenu(workout.id, e)}
-                          className="rounded-full p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-300"
-                          aria-label="Workout options"
+                      <div className="py-1">
+                        <button
+                          onClick={() => handleEdit(workout.id)}
+                          className="flex w-full items-center px-4 py-2 text-sm text-gray-200 hover:bg-gray-600"
                         >
-                          <MoreVertical className="h-5 w-5" />
+                          <Pencil className="mr-3 h-4 w-4" />
+                          Edit
                         </button>
-                        
-                        {activeMenu === workout.id && (
-                          <div className="absolute right-0 z-10 mt-1 w-48 rounded-md bg-white py-1 shadow-lg ring-1 ring-black ring-opacity-5 dark:bg-gray-800 dark:ring-gray-700">
-                            <button
-                              onClick={() => handleEdit(workout.id)}
-                              className="flex w-full items-center px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
-                            >
-                              <Pencil className="mr-3 h-4 w-4" />
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => openDeleteConfirmation(workout.id)}
-                              className="flex w-full items-center px-4 py-2 text-left text-sm text-red-600 hover:bg-gray-100 dark:text-red-400 dark:hover:bg-gray-700"
-                            >
-                              <Trash2 className="mr-3 h-4 w-4" />
-                              Delete
-                            </button>
-                          </div>
-                        )}
+                        <button
+                          onClick={() => openDeleteConfirmation(workout.id)}
+                          className="flex w-full items-center px-4 py-2 text-sm text-red-400 hover:bg-gray-600"
+                        >
+                          <Trash2 className="mr-3 h-4 w-4" />
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                
+                <Link
+                  href={`/workouts/${workout.id}`}
+                  className="block"
+                >
+                  <div className="p-6">
+                    <div className="mb-4 flex items-center justify-between">
+                      <h2 className="text-lg font-semibold text-gray-100">
+                        {formatDate(workout.date)}
+                      </h2>
+                      <span className="inline-flex items-center rounded-full bg-indigo-900/20 px-2.5 py-0.5 text-xs font-medium text-indigo-400">
+                        {new Date(workout.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                      </span>
+                    </div>
+                    <div className="mb-4 flex items-center text-gray-400">
+                      <Clock className="mr-1.5 h-4 w-4" />
+                      <span className="text-sm">
+                        {formatDate(workout.created_at)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center text-gray-400">
+                        <Dumbbell className="mr-1.5 h-4 w-4" />
+                        <span className="text-sm">{workout.totalSets} {workout.totalSets === 1 ? 'set' : 'sets'}</span>
+                      </div>
+                      <div className="flex items-center text-gray-400">
+                        <ArrowRight className="ml-1 h-4 w-4" />
                       </div>
                     </div>
                   </div>
-                </li>
-              ))}
-            </ul>
+                </Link>
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -441,10 +475,10 @@ export default function Workouts() {
       {/* Confirmation Dialog */}
       <ConfirmationDialog
         isOpen={confirmDialog.isOpen}
-        onClose={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+        onClose={() => setConfirmDialog({ ...confirmDialog, isOpen: false })}
         onConfirm={handleDelete}
         title="Delete Workout"
-        message={`Are you sure you want to delete "${confirmDialog.workoutName}"? This action cannot be undone and will remove all exercises and sets associated with this workout.`}
+        message={`Are you sure you want to delete "${confirmDialog.workoutName}"? This action cannot be undone.`}
       />
       
       {/* Toast Notification */}
@@ -452,7 +486,7 @@ export default function Workouts() {
         <Toast
           message={toast.message}
           type={toast.type}
-          onClose={() => setToast(prev => ({ ...prev, isOpen: false }))}
+          onClose={() => setToast({ ...toast, isOpen: false })}
         />
       )}
     </div>

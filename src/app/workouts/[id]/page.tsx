@@ -1,17 +1,18 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
-import { CheckCircle, Circle, ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Plus, Calendar, Dumbbell, Clock, Pencil, Trash2, AlertTriangle, Timer, Weight, Repeat } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import LiftTypeSelector from '@/components/LiftTypeSelector';
 
 type WorkoutData = {
   id: string;
-  name: string;
   date: string;
   completed: boolean;
+  notes?: string;
   exercises: ExerciseData[];
 };
 
@@ -35,14 +36,19 @@ type LiftType = {
   name: string;
 };
 
-export default function WorkoutDetail({ params }: { params: { id: string } }) {
+export default function WorkoutDetail() {
   const router = useRouter();
+  const params = useParams();
+  const workoutId = params.id as string;
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [workout, setWorkout] = useState<WorkoutData | null>(null);
   const [liftTypes, setLiftTypes] = useState<LiftType[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editMode, setEditMode] = useState(false);
+  const [selectedLiftType, setSelectedLiftType] = useState<string>('');
+  const [newExerciseSets, setNewExerciseSets] = useState<SetData[]>([{ id: crypto.randomUUID(), weight: 0, reps: 0, completed: false }]);
 
   useEffect(() => {
     const checkUserAndLoadWorkout = async () => {
@@ -76,7 +82,7 @@ export default function WorkoutDetail({ params }: { params: { id: string } }) {
         const { data: workoutData, error: workoutError } = await supabase
           .from('workouts')
           .select('*')
-          .eq('id', params.id)
+          .eq('id', workoutId)
           .single();
         
         if (workoutError) throw workoutError;
@@ -85,7 +91,7 @@ export default function WorkoutDetail({ params }: { params: { id: string } }) {
         const { data: exercisesData, error: exercisesError } = await supabase
           .from('exercises')
           .select('*')
-          .eq('workout_id', params.id);
+          .eq('workout_id', workoutId);
         
         if (exercisesError) throw exercisesError;
         
@@ -130,9 +136,9 @@ export default function WorkoutDetail({ params }: { params: { id: string } }) {
         
         setWorkout({
           id: workoutData.id,
-          name: workoutData.name,
           date: workoutData.date,
           completed: workoutData.completed,
+          notes: workoutData.notes,
           exercises: exercises
         });
       } catch (error: any) {
@@ -143,7 +149,7 @@ export default function WorkoutDetail({ params }: { params: { id: string } }) {
     };
     
     checkUserAndLoadWorkout();
-  }, [params.id, router]);
+  }, [workoutId, router]);
 
   const updateSetValue = async (exerciseId: string, setId: string, field: 'weight' | 'reps', value: number) => {
     if (!workout) return;
@@ -189,10 +195,10 @@ export default function WorkoutDetail({ params }: { params: { id: string } }) {
   const completeWorkout = async () => {
     if (!workout) return;
     
+    setSaving(true);
+    
     try {
-      setSaving(true);
-      
-      // Update in database
+      // Update workout in database
       const { error: updateError } = await supabase
         .from('workouts')
         .update({ completed: true })
@@ -209,9 +215,155 @@ export default function WorkoutDetail({ params }: { params: { id: string } }) {
           completed: true
         };
       });
+      
+      // Exit edit mode when completing workout
+      setEditMode(false);
     } catch (error: any) {
       console.error('Error completing workout:', error);
       setError(error.message || 'Failed to complete workout');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleEditMode = () => {
+    setEditMode(!editMode);
+  };
+
+  const addExercise = async () => {
+    if (!workout || !selectedLiftType) {
+      setError('Please select a lift type');
+      return;
+    }
+    
+    setSaving(true);
+    
+    try {
+      // Find the lift type name for display purposes
+      const liftType = liftTypes.find(lt => lt.id === selectedLiftType);
+      
+      // Create exercise in database
+      const { data: exerciseData, error: exerciseError } = await supabase
+        .from('exercises')
+        .insert([
+          {
+            name: liftType?.name || null,
+            workout_id: workout.id,
+            lift_type_id: selectedLiftType
+          }
+        ])
+        .select()
+        .single();
+      
+      if (exerciseError) throw exerciseError;
+      
+      // Create sets in database
+      const setsToInsert = newExerciseSets.map(set => ({
+        exercise_id: exerciseData.id,
+        reps: set.reps,
+        weight: set.weight,
+        completed: false
+      }));
+      
+      const { data: setsData, error: setsError } = await supabase
+        .from('sets')
+        .insert(setsToInsert)
+        .select();
+      
+      if (setsError) throw setsError;
+      
+      // Update local state
+      const newExercise: ExerciseData = {
+        id: exerciseData.id,
+        name: liftType?.name || 'Unknown Exercise',
+        liftTypeId: selectedLiftType,
+        liftTypeName: liftType?.name || null,
+        sets: setsData.map((set: any) => ({
+          id: set.id,
+          weight: set.weight,
+          reps: set.reps,
+          completed: false
+        }))
+      };
+      
+      setWorkout(prev => {
+        if (!prev) return prev;
+        
+        return {
+          ...prev,
+          exercises: [...prev.exercises, newExercise]
+        };
+      });
+      
+      setSelectedLiftType('');
+      setNewExerciseSets([{ id: crypto.randomUUID(), weight: 0, reps: 0, completed: false }]);
+    } catch (error: any) {
+      console.error('Error adding exercise:', error);
+      setError('Failed to add exercise: ' + error.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const addSetToExercise = async (exerciseId: string) => {
+    if (!workout) return;
+    
+    setSaving(true);
+    
+    try {
+      const newSet: SetData = {
+        id: crypto.randomUUID(), // Temporary ID
+        weight: 0,
+        reps: 0,
+        completed: false
+      };
+      
+      // Add to database
+      const { data: setData, error: setError } = await supabase
+        .from('sets')
+        .insert([
+          {
+            exercise_id: exerciseId,
+            weight: newSet.weight,
+            reps: newSet.reps,
+            completed: newSet.completed
+          }
+        ])
+        .select()
+        .single();
+      
+      if (setError) throw setError;
+      
+      // Update local state
+      setWorkout(prev => {
+        if (!prev) return prev;
+        
+        const updatedExercises = [...prev.exercises];
+        const exerciseIndex = updatedExercises.findIndex(ex => ex.id === exerciseId);
+        
+        if (exerciseIndex !== -1) {
+          updatedExercises[exerciseIndex] = {
+            ...updatedExercises[exerciseIndex],
+            sets: [
+              ...updatedExercises[exerciseIndex].sets,
+              {
+                id: setData.id,
+                weight: setData.weight,
+                reps: setData.reps,
+                completed: setData.completed
+              }
+            ]
+          };
+        }
+        
+        return {
+          ...prev,
+          exercises: updatedExercises
+        };
+      });
+    } catch (error: any) {
+      console.error('Error adding set:', error);
+      setError('Failed to add set: ' + error.message);
     } finally {
       setSaving(false);
     }
@@ -261,179 +413,232 @@ export default function WorkoutDetail({ params }: { params: { id: string } }) {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="mb-6 flex items-center justify-between">
-        <div className="flex items-center space-x-4">
-          <Link
-            href="/workouts"
-            className="rounded-full p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </Link>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-            {workout.name || `Workout ${new Date(workout.date).toLocaleDateString()}`}
-          </h1>
+    <div className="min-h-screen bg-gray-900 pb-10">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6">
+        <div className="mb-6 flex items-center justify-between">
+          <div className="flex items-center">
+            <Link
+              href="/workouts"
+              className="mr-4 flex items-center rounded-md bg-gray-800 px-4 py-2 text-sm font-medium text-gray-200 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-900"
+            >
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to Workouts
+            </Link>
+            <h1 className="text-2xl font-bold text-gray-100">
+              {new Date(workout.date).toLocaleDateString('en-US', { 
+                weekday: 'long',
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric' 
+              })}
+            </h1>
+          </div>
+          <div className="flex items-center space-x-3">
+            <button
+              onClick={toggleEditMode}
+              className="flex items-center rounded-md bg-gray-800 px-4 py-2 text-sm font-medium text-gray-200 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-900"
+            >
+              <Pencil className="mr-2 h-4 w-4" />
+              Edit
+            </button>
+          </div>
         </div>
+
+        {/* Workout Info */}
+        <div className="mb-8 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+          <div className="rounded-lg bg-gray-800 p-6 border border-gray-700 shadow-md">
+            <h2 className="mb-4 text-lg font-medium text-gray-200">Workout Details</h2>
+            <div className="space-y-3">
+              <div className="flex items-center text-gray-300">
+                <Calendar className="mr-2 h-5 w-5 text-gray-400" />
+                <span>{new Date(workout.date).toLocaleDateString()}</span>
+              </div>
+              <div className="flex items-center text-gray-300">
+                <Clock className="mr-2 h-5 w-5 text-gray-400" />
+                <span>
+                  {new Date(workout.date).toLocaleTimeString()}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-gray-800 p-6 border border-gray-700 shadow-md">
+            <h2 className="mb-4 text-lg font-medium text-gray-200">Workout Summary</h2>
+            <div className="space-y-3">
+              <div className="flex items-center text-gray-300">
+                <Dumbbell className="mr-2 h-5 w-5 text-gray-400" />
+                <span>{workout.exercises.length} Exercises</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-gray-800 p-6 border border-gray-700 shadow-md">
+            <h2 className="mb-4 text-lg font-medium text-gray-200">Notes</h2>
+            {workout.notes ? (
+              <p className="text-gray-300 whitespace-pre-line">{workout.notes}</p>
+            ) : (
+              <p className="text-gray-400 italic">No notes for this workout</p>
+            )}
+          </div>
+        </div>
+
+        {/* Exercises */}
+        <div className="mb-6 flex items-center justify-between">
+          <h2 className="text-xl font-bold text-gray-100">Exercises</h2>
+        </div>
+
+        {workout.exercises.length === 0 ? (
+          <div className="rounded-lg bg-gray-800 p-8 text-center border border-gray-700 shadow-md">
+            <Dumbbell className="mx-auto h-12 w-12 text-gray-500 mb-4" />
+            <h3 className="text-lg font-medium text-gray-300 mb-2">No Exercises Yet</h3>
+            <p className="text-gray-400 max-w-md mx-auto">
+              Start adding exercises to track your workout progress.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {workout.exercises.map((exercise, index) => (
+              <div 
+                key={exercise.id} 
+                className="rounded-lg bg-gray-800 border border-gray-700 shadow-md overflow-hidden"
+              >
+                <div className="bg-gray-800 p-6 border-b border-gray-700">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-lg font-medium text-gray-100">{exercise.name}</h3>
+                      {exercise.liftTypeName && (
+                        <span className="mt-1 inline-block text-sm text-gray-400">
+                          {exercise.liftTypeName}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Sets */}
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-700">
+                    <thead className="bg-gray-900">
+                      <tr>
+                        <th
+                          scope="col"
+                          className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-400"
+                        >
+                          Set
+                        </th>
+                        <th
+                          scope="col"
+                          className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-400"
+                        >
+                          Weight
+                        </th>
+                        <th
+                          scope="col"
+                          className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-400"
+                        >
+                          Reps
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-800 bg-gray-800">
+                      {exercise.sets.map((set, setIndex) => (
+                        <tr key={set.id} className="hover:bg-gray-700">
+                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-300">
+                            {setIndex + 1}
+                          </td>
+                          <td className="whitespace-nowrap px-6 py-4 text-sm font-medium text-gray-100">
+                            {set.weight} lbs
+                          </td>
+                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-300">
+                            {set.reps}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="bg-gray-800 px-6 py-4 border-t border-gray-700">
+                  {!workout.completed && editMode && (
+                    <button
+                      onClick={() => addSetToExercise(exercise.id)}
+                      className="flex items-center rounded-md bg-gray-700 px-4 py-2 text-sm font-medium text-gray-200 hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-800"
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add Set
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
-      
-      <div className="mb-6">
-        <p className="text-gray-600">Date: {new Date(workout.date).toLocaleDateString()}</p>
-        <p className="text-gray-600">
-          Status: {workout.completed ? (
-            <span className="font-medium text-green-600">Completed</span>
-          ) : (
-            <span className="font-medium text-blue-600">In Progress</span>
-          )}
-        </p>
-      </div>
-      
-      {!workout.completed && (
-        <div className="mb-8">
+
+      {/* Add Exercise */}
+      {!workout.completed && editMode && (
+        <div className="mb-8 rounded-lg border bg-gray-800 p-6 shadow-md">
+          <h3 className="mb-4 text-lg font-medium text-gray-100">Add New Exercise</h3>
+          
+          <div className="mb-4">
+            <label htmlFor="liftType" className="mb-2 block text-sm font-medium text-gray-300">
+              Select Lift Type
+            </label>
+            <LiftTypeSelector
+              liftTypes={liftTypes}
+              selectedLiftType={selectedLiftType}
+              onSelect={setSelectedLiftType}
+              placeholder="Select Lift Type"
+              className="w-full"
+            />
+          </div>
+          
+          <div className="mb-4">
+            <label className="mb-2 block text-sm font-medium text-gray-300">
+              Initial Set
+            </label>
+            <div className="flex space-x-4">
+              <div>
+                <label htmlFor="weight" className="mb-1 block text-xs font-medium text-gray-500">
+                  Weight
+                </label>
+                <input
+                  type="number"
+                  id="weight"
+                  min="0"
+                  step="2.5"
+                  value={newExerciseSets[0].weight || ''}
+                  onChange={(e) => setNewExerciseSets([{...newExerciseSets[0], weight: parseFloat(e.target.value) || 0}])}
+                  className="block w-24 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white sm:text-sm"
+                  placeholder="Weight"
+                />
+              </div>
+              <div>
+                <label htmlFor="reps" className="mb-1 block text-xs font-medium text-gray-500">
+                  Reps
+                </label>
+                <input
+                  type="number"
+                  id="reps"
+                  min="0"
+                  value={newExerciseSets[0].reps || ''}
+                  onChange={(e) => setNewExerciseSets([{...newExerciseSets[0], reps: parseInt(e.target.value) || 0}])}
+                  className="block w-24 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white sm:text-sm"
+                  placeholder="Reps"
+                />
+              </div>
+            </div>
+          </div>
+          
           <button
-            onClick={completeWorkout}
-            className="rounded-md bg-green-600 px-4 py-2 font-medium text-white shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-green-500 focus:ring-offset-2"
+            onClick={addExercise}
+            disabled={!selectedLiftType}
+            className="rounded-md bg-blue-600 px-4 py-2 font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-900"
           >
-            Mark Workout as Complete
+            Add Exercise
           </button>
         </div>
       )}
-      
-      <div className="mb-8">
-        <h2 className="mb-4 text-xl font-semibold">Exercises</h2>
-        
-        <div className="grid gap-6 md:grid-cols-2">
-          {workout.exercises.map(exercise => (
-            <div key={exercise.id} className="rounded-lg border bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-              <div className="mb-4">
-                <h2 className="text-xl font-medium dark:text-white">{exercise.name}</h2>
-                {exercise.liftTypeName && (
-                  <p className="text-sm text-gray-500 dark:text-gray-400">
-                    Type: {exercise.liftTypeName}
-                  </p>
-                )}
-              </div>
-              
-              <div className="overflow-x-auto sm:overflow-visible">
-                <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-                  <thead className="hidden sm:table-header-group bg-gray-50 dark:bg-gray-700">
-                    <tr>
-                      <th scope="col" className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                        Set
-                      </th>
-                      <th scope="col" className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                        Weight
-                      </th>
-                      <th scope="col" className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                        Reps
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                    {exercise.sets.map((set, index) => (
-                      <tr key={set.id}>
-                        {/* Mobile layout - grid style */}
-                        <td className="sm:hidden py-4 space-y-3">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-medium text-gray-900 dark:text-white">Set {index + 1}</span>
-                          </div>
-                          <div className="flex items-center space-x-6">
-                            <div className="flex flex-col">
-                              <span className="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">Weight</span>
-                              {workout.completed ? (
-                                <span className="py-1.5 text-sm dark:text-white">{set.weight}</span>
-                              ) : (
-                                <input
-                                  type="number"
-                                  inputMode="decimal"
-                                  pattern="[0-9]*"
-                                  min="0"
-                                  step="2.5"
-                                  value={set.weight || ''}
-                                  onChange={(e) => updateSetValue(exercise.id, set.id, 'weight', parseFloat(e.target.value) || 0)}
-                                  className="block w-24 rounded-md border-0 py-2 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 dark:bg-gray-700 dark:text-white dark:ring-gray-600 dark:focus:ring-blue-500 sm:text-sm"
-                                  aria-label="Weight in pounds"
-                                  placeholder="Weight"
-                                />
-                              )}
-                            </div>
-                            <div className="flex flex-col">
-                              <span className="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">Reps</span>
-                              {workout.completed ? (
-                                <span className="py-1.5 text-sm dark:text-white">{set.reps}</span>
-                              ) : (
-                                <input
-                                  type="number"
-                                  inputMode="numeric"
-                                  pattern="[0-9]*"
-                                  min="0"
-                                  value={set.reps || ''}
-                                  onChange={(e) => updateSetValue(exercise.id, set.id, 'reps', parseInt(e.target.value) || 0)}
-                                  className="block w-24 rounded-md border-0 py-2 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 dark:bg-gray-700 dark:text-white dark:ring-gray-600 dark:focus:ring-blue-500 sm:text-sm"
-                                  aria-label="Number of repetitions"
-                                  placeholder="Reps"
-                                />
-                              )}
-                            </div>
-                          </div>
-                        </td>
-                        
-                        {/* Desktop layout - traditional table */}
-                        <td className="hidden sm:table-cell whitespace-nowrap px-3 py-2 text-sm font-medium text-gray-900 dark:text-white">
-                          {index + 1}
-                        </td>
-                        <td className="hidden sm:table-cell whitespace-nowrap px-3 py-2 text-sm text-gray-900 dark:text-white">
-                          {workout.completed ? (
-                            set.weight
-                          ) : (
-                            <input
-                              type="number"
-                              inputMode="decimal"
-                              pattern="[0-9]*"
-                              min="0"
-                              step="2.5"
-                              value={set.weight || ''}
-                              onChange={(e) => updateSetValue(exercise.id, set.id, 'weight', parseFloat(e.target.value) || 0)}
-                              className="block w-24 rounded-md border-0 py-2 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 dark:bg-gray-700 dark:text-white dark:ring-gray-600 dark:focus:ring-blue-500 sm:text-sm"
-                              aria-label="Weight in pounds"
-                              placeholder="Weight"
-                            />
-                          )}
-                        </td>
-                        <td className="hidden sm:table-cell whitespace-nowrap px-3 py-2 text-sm text-gray-900 dark:text-white">
-                          {workout.completed ? (
-                            set.reps
-                          ) : (
-                            <input
-                              type="number"
-                              inputMode="numeric"
-                              pattern="[0-9]*"
-                              min="0"
-                              value={set.reps || ''}
-                              onChange={(e) => updateSetValue(exercise.id, set.id, 'reps', parseInt(e.target.value) || 0)}
-                              className="block w-24 rounded-md border-0 py-2 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 dark:bg-gray-700 dark:text-white dark:ring-gray-600 dark:focus:ring-blue-500 sm:text-sm"
-                              aria-label="Number of repetitions"
-                              placeholder="Reps"
-                            />
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="mt-8 flex justify-center">
-        <Link
-          href="/workouts"
-          className="flex items-center text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
-        >
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back to Workouts
-        </Link>
-      </div>
     </div>
   );
 }

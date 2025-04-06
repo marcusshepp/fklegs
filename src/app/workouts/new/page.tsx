@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import LiftTypeSelector from '@/components/LiftTypeSelector';
+import AddLiftTypeButton from '@/components/AddLiftTypeButton';
 
 // Define types for our workout data
 type Exercise = {
@@ -795,13 +796,24 @@ export default function NewWorkout() {
               
               <div className="flex flex-col sm:flex-row gap-4">
                 <div className="flex-grow">
-                  <LiftTypeSelector
-                    liftTypes={liftTypes}
-                    selectedLiftType={selectedLiftType}
-                    onSelect={setSelectedLiftType}
-                    placeholder="Select Lift Type"
-                    className="w-full"
-                  />
+                  <div className="flex gap-2">
+                    <LiftTypeSelector
+                      liftTypes={liftTypes}
+                      selectedLiftType={selectedLiftType}
+                      onSelect={setSelectedLiftType}
+                      placeholder="Select Lift Type"
+                      className="w-full"
+                    />
+                    <AddLiftTypeButton 
+                      variant="secondary"
+                      iconOnly
+                      onLiftTypeAdded={(newLiftType) => {
+                        // Add the new lift type to the list and select it
+                        setLiftTypes(prev => [...prev, newLiftType]);
+                        setSelectedLiftType(newLiftType.id);
+                      }}
+                    />
+                  </div>
                 </div>
                 
                 <button
